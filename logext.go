@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,19 +17,20 @@ const (
 	// order they appear (the order listed here) or the format they present (as
 	// described in the comments).  A colon appears after these items:
 	//	2009/0123 01:23:23.123123 /a/b/c/d.go:23: message
-	Ldate         = 1 << iota     // the date: 2009/0123
-	Ltime                         // the time: 01:23:23
-	Lmicroseconds                 // microsecond resolution: 01:23:23.123123.  assumes Ltime.
-	Llongfile                     // full file name and line number: /a/b/c/d.go:23
-	Lshortfile                    // final file name element and line number: d.go:23. overrides Llongfile
-	Lmodule                       // module name
-	Llevel                        // level: 0(Debug), 1(Info), 2(Warn), 3(Error), 4(Panic), 5(Fatal)
-	LstdFlags     = Ldate | Ltime // initial values for the standard logger
-	Ldefault      = Lmodule | Llevel | Lshortfile | LstdFlags
+	Ldate         = 1 << iota // the date: 2009/0123
+	Ltime                     // the time: 01:23:23
+	Lmicroseconds             // microsecond resolution: 01:23:23.123123.  assumes Ltime.
+	Llongfile                 // full file name and line number: /a/b/c/d.go:23
+	Lshortfile                // final file name element and line number: d.go:23. overrides Llongfile
+	Lmodule                   // module name
+	Llevel                    // level: 0(Debug), 1(Info), 2(Warn), 3(Error), 4(Panic), 5(Fatal)
+	Lcolor
+	LstdFlags = Ldate | Ltime // initial values for the standard logger
+	Ldefault  = Lmodule | Llevel | Lshortfile | LstdFlags | Lcolor
 ) // [prefix][time][level][module][shortfile|longfile]
 
 const (
-	Ldebug   = iota
+	Ldebug = iota
 	Linfo
 	Lwarn
 	Lerror
@@ -38,12 +39,21 @@ const (
 )
 
 var levels = []string{
-	"[DEBUG]",
-	"[INFO]",
-	"[WARN]",
-	"[ERROR]",
-	"[PANIC]",
-	"[FATAL]",
+	"[D]",
+	"[I]",
+	"[W]",
+	"[E]",
+	"[P]",
+	"[F]",
+}
+
+var colors = []string{
+	"1;36", // trace	cyan
+	"1;34", // debug	blue
+	"1;32", // info		green
+	"1;33", // warn		yellow
+	"1;31", // error	red
+	"1;35", // fatal	purple
 }
 
 // A Logger represents an active logging object that generates lines of
@@ -51,13 +61,14 @@ var levels = []string{
 // the Writer's Write method.  A Logger can be used simultaneously from
 // multiple goroutines; it guarantees to serialize access to the Writer.
 type Logger struct {
-	mu     sync.Mutex   // ensures atomic writes; protects the following fields
-	prefix string       // prefix to write at beginning of each line
-	flag   int          // properties
-	Level  int
-	out    io.Writer    // destination for output
-	buf    bytes.Buffer // for accumulating text to write
-	levelStats [6]int64
+	mu          sync.Mutex // ensures atomic writes; protects the following fields
+	prefix      string     // prefix to write at beginning of each line
+	flag        int        // properties
+	Level       int
+	out         io.Writer    // destination for output
+	buf         bytes.Buffer // for accumulating text to write
+	levelStats  [6]int64
+	colorEnable bool
 }
 
 // New creates a new Logger.   The out variable sets the
@@ -65,7 +76,9 @@ type Logger struct {
 // The prefix appears at the beginning of each generated log line.
 // The flag argument defines the logging properties.
 func New(out io.Writer, prefix string, flag int) *Logger {
-	return &Logger{out: out, prefix: prefix, Level: 1, flag: flag}
+	return &Logger{out: out, prefix: prefix, Level: 1, flag: flag,
+		colorEnable: flag&(Llevel|Lcolor) != 0,
+	}
 }
 
 var Std = New(os.Stderr, "", Ldefault)
@@ -100,7 +113,7 @@ func moduleOf(file string) string {
 	if pos != -1 {
 		pos1 := strings.LastIndex(file[:pos], "/src/")
 		if pos1 != -1 {
-			return file[pos1+5:pos]
+			return file[pos1+5 : pos]
 		}
 	}
 	return "UNKNOWN"
@@ -139,9 +152,17 @@ func (l *Logger) formatHeader(buf *bytes.Buffer, t time.Time, file string, line 
 		buf.WriteString(reqId)
 		buf.WriteByte(']')
 	}
+
+	if l.colorEnable {
+		buf.WriteString("\033[" + colors[lvl] + "m")
+	}
 	if l.flag&Llevel != 0 {
 		buf.WriteString(levels[lvl])
 	}
+	if l.colorEnable {
+		l.buf.WriteString("\033[0m")
+	}
+
 	if l.flag&Lmodule != 0 {
 		buf.WriteByte('[')
 		buf.WriteString(moduleOf(file))
@@ -314,7 +335,7 @@ func (l *Logger) Panicln(v ...interface{}) {
 func (l *Logger) Stack(v ...interface{}) {
 	s := fmt.Sprint(v...)
 	s += "\n"
-	buf := make([]byte, 1024 * 1024)
+	buf := make([]byte, 1024*1024)
 	n := runtime.Stack(buf, true)
 	s += string(buf[:n])
 	s += "\n"
@@ -516,7 +537,7 @@ func Panicln(v ...interface{}) {
 func Stack(v ...interface{}) {
 	s := fmt.Sprint(v...)
 	s += "\n"
-	buf := make([]byte, 1024 * 1024)
+	buf := make([]byte, 1024*1024)
 	n := runtime.Stack(buf, true)
 	s += string(buf[:n])
 	s += "\n"
