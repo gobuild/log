@@ -17,16 +17,17 @@ const (
 	// order they appear (the order listed here) or the format they present (as
 	// described in the comments).  A colon appears after these items:
 	//	2009/0123 01:23:23.123123 /a/b/c/d.go:23: message
-	Ldate         = 1 << iota // the date: 2009/0123
-	Ltime                     // the time: 01:23:23
-	Lmicroseconds             // microsecond resolution: 01:23:23.123123.  assumes Ltime.
-	Llongfile                 // full file name and line number: /a/b/c/d.go:23
-	Lshortfile                // final file name element and line number: d.go:23. overrides Llongfile
-	Lmodule                   // module name
-	Llevel                    // level: 0(Debug), 1(Info), 2(Warn), 3(Error), 4(Panic), 5(Fatal)
-	Lcolor
-	LstdFlags = Ldate | Ltime // initial values for the standard logger
-	Ldefault  = Lmodule | Llevel | Lshortfile | LstdFlags | Lcolor
+	Ldate         = 1 << iota     // the date: 2009/0123
+	Ltime                         // the time: 01:23:23
+	Lmicroseconds                 // microsecond resolution: 01:23:23.123123.  assumes Ltime.
+	Llongfile                     // full file name and line number: /a/b/c/d.go:23
+	Lshortfile                    // final file name element and line number: d.go:23. overrides Llongfile
+	Lmodule                       // module name
+	Llevel                        // level: 0(Debug), 1(Info), 2(Warn), 3(Error), 4(Panic), 5(Fatal)
+	Llongcolor                    // color will start [info] end of line
+	Lshortcolor                   // color only include [info]
+	LstdFlags     = Ldate | Ltime // initial values for the standard logger
+	Ldefault      = Llevel | LstdFlags | Lshortfile | Llongcolor
 ) // [prefix][time][level][module][shortfile|longfile]
 
 const (
@@ -38,22 +39,54 @@ const (
 	Lfatal
 )
 
+const (
+	ForeBlack  = iota + 30 //30
+	ForeRed                //31
+	ForeGreen              //32
+	ForeYellow             //33
+	ForeBlue               //34
+	ForePurple             //35
+	ForeCyan               //36
+	ForeWhite              //37
+)
+
+const (
+	BackBlack  = iota + 40 //40
+	BackRed                //41
+	BackGreen              //42
+	BackYellow             //43
+	BackBlue               //44
+	BackPurple             //45
+	BackCyan               //46
+	BackWhite              //47
+)
+
 var levels = []string{
-	"[D]",
-	"[I]",
-	"[W]",
-	"[E]",
-	"[P]",
-	"[F]",
+	"[Debug]",
+	"[Info]",
+	"[Warn]",
+	"[Error]",
+	"[Panic]",
+	"[Fatal]",
 }
 
-var colors = []string{
-	"1;36", // trace	cyan
-	"1;34", // debug	blue
-	"1;32", // info		green
-	"1;33", // warn		yellow
-	"1;31", // error	red
-	"1;35", // fatal	purple
+// MUST called before all logs
+func SetLevels(lvs []string) {
+	levels = lvs
+}
+
+var colors = []int{
+	ForeCyan,
+	ForeBlue,
+	ForeGreen,
+	ForeYellow,
+	ForeRed,
+	ForePurple,
+}
+
+// MUST called before all logs
+func SetColors(cls []int) {
+	colors = cls
 }
 
 // A Logger represents an active logging object that generates lines of
@@ -61,14 +94,13 @@ var colors = []string{
 // the Writer's Write method.  A Logger can be used simultaneously from
 // multiple goroutines; it guarantees to serialize access to the Writer.
 type Logger struct {
-	mu          sync.Mutex // ensures atomic writes; protects the following fields
-	prefix      string     // prefix to write at beginning of each line
-	flag        int        // properties
-	Level       int
-	out         io.Writer    // destination for output
-	buf         bytes.Buffer // for accumulating text to write
-	levelStats  [6]int64
-	colorEnable bool
+	mu         sync.Mutex // ensures atomic writes; protects the following fields
+	prefix     string     // prefix to write at beginning of each line
+	flag       int        // properties
+	Level      int
+	out        io.Writer    // destination for output
+	buf        bytes.Buffer // for accumulating text to write
+	levelStats [6]int64
 }
 
 // New creates a new Logger.   The out variable sets the
@@ -76,9 +108,7 @@ type Logger struct {
 // The prefix appears at the beginning of each generated log line.
 // The flag argument defines the logging properties.
 func New(out io.Writer, prefix string, flag int) *Logger {
-	return &Logger{out: out, prefix: prefix, Level: 1, flag: flag,
-		colorEnable: flag&(Llevel|Lcolor) != 0,
-	}
+	return &Logger{out: out, prefix: prefix, Level: 1, flag: flag}
 }
 
 var Std = New(os.Stderr, "", Ldefault)
@@ -151,16 +181,18 @@ func (l *Logger) formatHeader(buf *bytes.Buffer, t time.Time, file string, line 
 		buf.WriteByte('[')
 		buf.WriteString(reqId)
 		buf.WriteByte(']')
+		buf.WriteByte(' ')
 	}
 
-	if l.colorEnable {
-		buf.WriteString("\033[" + colors[lvl] + "m")
+	if l.flag&(Lshortcolor|Llongcolor) != 0 {
+		buf.WriteString(fmt.Sprintf("\033[1;%dm", colors[lvl]))
 	}
 	if l.flag&Llevel != 0 {
 		buf.WriteString(levels[lvl])
+		buf.WriteByte(' ')
 	}
-	if l.colorEnable {
-		l.buf.WriteString("\033[0m")
+	if l.flag&Lshortcolor != 0 {
+		buf.WriteString("\033[0m")
 	}
 
 	if l.flag&Lmodule != 0 {
@@ -183,7 +215,7 @@ func (l *Logger) formatHeader(buf *bytes.Buffer, t time.Time, file string, line 
 		buf.WriteString(file)
 		buf.WriteByte(':')
 		itoa(buf, line, -1)
-		buf.WriteString(": ")
+		buf.WriteByte(' ')
 	}
 }
 
@@ -217,6 +249,9 @@ func (l *Logger) Output(reqId string, lvl int, calldepth int, s string) error {
 	l.buf.Reset()
 	l.formatHeader(&l.buf, now, file, line, lvl, reqId)
 	l.buf.WriteString(s)
+	if l.flag&Llongcolor != 0 {
+		l.buf.WriteString("\033[0m")
+	}
 	if len(s) > 0 && s[len(s)-1] != '\n' {
 		l.buf.WriteByte('\n')
 	}
